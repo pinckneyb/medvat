@@ -49,12 +49,26 @@ python medvat_app.py
 
 ## Usage
 
+### Single Video Processing
+
 1. **Enter API Key**: Paste your Google Gemini API key in the sidebar
 2. **Select Rubric**: Choose from available assessment rubrics
-3. **Select Video**: Choose a video file (MP4, MOV, AVI, MKV)
+3. **Select Video**: Click "Select Video" to choose a video file (MP4, MOV, AVI, MKV)
 4. **Run Analysis**: Click "RUN AI ANALYSIS" to process the video
 5. **Review & Edit**: Review AI-generated scores and feedback, edit as needed
 6. **Export PDF**: Generate a professional PDF report
+
+### Batch Processing
+
+1. **Configure Procedure**: Select the appropriate rubric/procedure before loading videos
+2. **Enter API Key**: Paste your Google Gemini API key in the sidebar
+3. **Select Multiple Videos**: Click "Batch" button to select multiple video files
+4. **Start Batch Processing**: Click "START BATCH PROCESSING" to process all videos
+5. **Automatic PDF Generation**: Each video will be analyzed and a PDF report will be automatically saved next to each video file
+6. **Progress Tracking**: Watch the batch progress bar and status updates
+7. **Completion Summary**: A summary dialog shows successful and failed videos
+
+**Note**: Configure the procedure/rubric BEFORE selecting videos for batch processing. All videos in a batch will be assessed using the same rubric.
 
 ## Features
 

@@ -447,17 +447,37 @@ class GeminiClient:
                - **CRITICAL:** Evaluate not just whether steps were completed, but HOW they were performed. Consider patient trauma, pain, and tissue damage in your scoring.
                - **CALIBRATION:** Remember you are evaluating a novice resident. Distinguish between "inefficient/clumsy" (acceptable for pass, score 3-4) and "dangerous/traumatic" (fail, score 1-2). If the clinical goal is achieved safely, even with inefficiency, mark as Pass but note inefficiency in feedback.
             
-            2. Provide 'actionable_advice' for every single item based on visual evidence.
+            2. **GENERAL SAFETY DIRECTIVE: INSTRUMENT HYGIENE & SAFETY**
+               - Regardless of the specific procedure, you must continuously monitor for 'Instrument Hygiene' violations. If any of the following occur, you must flag them immediately in the commentary and potentially fail the relevant step or the entire proficiency rating if the action is dangerous.
+               
+               a. **Inappropriate Dual-Use:**
+                  - Instruments must only be used for their intended purpose.
+                  - **CRITICAL FAIL:** Using an instrument to dissect, cut, or spread tissue while it is *simultaneously* holding another object (e.g., a tube, a needle, or gauze). This blunts the instrument, crushes the object, and risks uncontrolled trauma.
+                  - **Example:** Dissecting with a Kelly clamp while it is gripping a chest tube.
+               
+               b. **Uncontrolled Sharps:**
+                  - Watch for needles or scalpels being waved in the air, left on the patient drape, or handled with fingers instead of instruments (unless appropriate).
+                  - **Flag:** Ideally, sharps should be "parked" safely or handed off immediately after use.
+               c. **Loss of Tension/Control:**
+                  - Watch for instruments slipping, requiring repeated re-grasping, or being used with a loose grip that allows the tip to wander.
+                  - **Comment:** Note any "fumbling" or "resetting" of the grip as an efficiency issue.
+               
+               **If a Critical Fail (Rule 2a - Inappropriate Dual-Use) is observed:**
+                  - Mark the relevant step (e.g., "Grasps tube" or "Dissects") as **"No"**.
+                  - Mark "Proficiency" (if present) as **"No"**.
+                  - In the feedback, use the phrase: **"CRITICAL SAFETY VIOLATION: Instrument Hygiene."**
+            
+            3. Provide 'actionable_advice' for every single item based on visual evidence.
                - **MANDATORY:** If you observe signs of patient trauma, excessive force, repetitive unnecessary motions, or inefficiency, you MUST explicitly mention these in your advice.
                - **CALIBRATION:** When noting inefficiency (multiple attempts, fumbling), distinguish between "needs improvement" (for clumsy but safe technique) and "critical error" (for dangerous technique). Provide constructive feedback that helps the resident improve.
                - Focus on specific techniques that would reduce patient discomfort and improve outcomes.
             
-            3. Provide a 'summative_comment' for the whole procedure.
+            4. Provide a 'summative_comment' for the whole procedure.
                - Include an assessment of overall patient impact and technique finesse.
                - **CALIBRATION:** Acknowledge that novice residents may be slow or clumsy but still proficient if they are safe and achieve the clinical goal. Only fail if there are safety concerns or the procedure was ineffective.
                - Highlight any concerns about patient trauma or inefficient technique, but frame them appropriately for a learning context.
             
-            4. **MANDATORY TIMESTAMP REQUIREMENT:**
+            5. **MANDATORY TIMESTAMP REQUIREMENT:**
                - For any criterion where the score indicates poor performance (e.g., 'No' for binary, or <=3 for Likert), you MUST provide a specific timestamp (MM:SS format) in the 'advice' field citing exactly where the error or inefficient behavior occurred.
                - Example format: "[01:15] The student fumbled the needle driver..."
                - Example format: "[02:32] You performed 5 small spreading motions here instead of one decisive spread..."
@@ -734,15 +754,34 @@ class MedVATApp(ctk.CTk):
         
         # File Selection
         ctk.CTkLabel(self.sidebar, text="Video File:", anchor="w").pack(padx=20, pady=(20,5), anchor="w")
-        self.btn_file = ctk.CTkButton(self.sidebar, text="Select Video", command=self.select_file, fg_color="#3B8ED0")
-        self.btn_file.pack(padx=20, fill="x")
+        file_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        file_frame.pack(padx=20, fill="x")
+        
+        self.btn_file = ctk.CTkButton(file_frame, text="Select Video", command=self.select_file, fg_color="#3B8ED0", width=100)
+        self.btn_file.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        self.btn_batch = ctk.CTkButton(file_frame, text="Batch", command=self.select_batch_files, fg_color="#8B5CF6", width=80)
+        self.btn_batch.pack(side="right")
+        
         self.lbl_file = ctk.CTkLabel(self.sidebar, text="No file selected", text_color="gray", wraplength=200)
         self.lbl_file.pack(padx=20, pady=5)
+        
+        # Batch Status (hidden initially)
+        self.batch_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        self.batch_frame.pack(padx=20, pady=(10, 0), fill="x")
+        self.lbl_batch_status = ctk.CTkLabel(self.batch_frame, text="", text_color="blue", font=("Arial", 10))
+        self.batch_progress = ctk.CTkProgressBar(self.batch_frame)
+        self.batch_progress.pack(fill="x", pady=(5, 0))
+        self.batch_frame.pack_forget()  # Hide initially
         
         # Analyze Button
         self.btn_analyze = ctk.CTkButton(self.sidebar, text="RUN AI ANALYSIS", command=self.start_analysis, 
                                        fg_color="green", height=50, font=("Arial", 14, "bold"), state="disabled")
         self.btn_analyze.pack(padx=20, pady=30, fill="x")
+        
+        # Batch processing variables
+        self.batch_videos = []
+        self.batch_processing = False
         
         # Progress
         self.progress = ctk.CTkProgressBar(self.sidebar)
@@ -816,6 +855,25 @@ class MedVATApp(ctk.CTk):
             self.selected_video_path = path
             self.lbl_file.configure(text=os.path.basename(path))
             self.btn_analyze.configure(state="normal")
+            # Hide batch frame if visible
+            self.batch_frame.pack_forget()
+            self.batch_videos = []
+    
+    def select_batch_files(self):
+        """Select multiple video files for batch processing."""
+        paths = filedialog.askopenfilenames(
+            title="Select Videos for Batch Processing",
+            filetypes=[("Video", "*.mp4 *.mov *.avi *.mkv")]
+        )
+        if paths:
+            self.batch_videos = list(paths)
+            self.lbl_file.configure(text=f"{len(self.batch_videos)} videos selected")
+            # Show batch status frame
+            self.batch_frame.pack(padx=20, pady=(10, 0), fill="x", before=self.btn_analyze)
+            self.lbl_batch_status.configure(text=f"Ready to process {len(self.batch_videos)} videos")
+            self.batch_progress.set(0)
+            self.btn_analyze.configure(state="normal", text="START BATCH PROCESSING")
+            self.selected_video_path = None  # Clear single file selection
 
     def load_config(self):
         """Load API key from config file."""
@@ -987,12 +1045,192 @@ class MedVATApp(ctk.CTk):
             messagebox.showwarning("Missing Key", "Please enter a Gemini API Key.")
             return
         
-        self.btn_analyze.configure(state="disabled", fg_color="gray")
-        self.progress.set(0)
+        # Check if batch mode
+        if self.batch_videos:
+            self.start_batch_processing(api_key)
+        else:
+            if not self.selected_video_path:
+                messagebox.showwarning("No Video", "Please select a video file first.")
+                return
+            
+            self.btn_analyze.configure(state="disabled", fg_color="gray", text="RUN AI ANALYSIS")
+            self.progress.set(0)
+            
+            # Run in thread to keep UI responsive
+            thread = threading.Thread(target=self.run_ai_thread, args=(api_key,))
+            thread.start()
+    
+    def start_batch_processing(self, api_key):
+        """Start batch processing of multiple videos."""
+        if not self.batch_videos:
+            return
         
-        # Run in thread to keep UI responsive
-        thread = threading.Thread(target=self.run_ai_thread, args=(api_key,))
+        self.batch_processing = True
+        self.btn_analyze.configure(state="disabled", fg_color="gray", text="PROCESSING BATCH...")
+        self.btn_file.configure(state="disabled")
+        self.btn_batch.configure(state="disabled")
+        self.batch_progress.set(0)
+        
+        # Run batch processing in thread
+        thread = threading.Thread(target=self.run_batch_thread, args=(api_key,))
         thread.start()
+    
+    def run_batch_thread(self, api_key):
+        """Process multiple videos in batch."""
+        client = GeminiClient(api_key)
+        rubric = self.rubrics[self.current_rubric_key]
+        auto_detect = rubric.get("auto_detect", False)
+        total_videos = len(self.batch_videos)
+        successful = 0
+        failed = []
+        
+        for idx, video_path in enumerate(self.batch_videos):
+            try:
+                # Update batch status
+                video_name = os.path.basename(video_path)
+                self.after(0, lambda vn=video_name, i=idx, t=total_videos: self.update_batch_status(
+                    f"Processing {i+1}/{t}: {vn}", (i+1) / total_videos
+                ))
+                
+                # Process video
+                def update_prog(msg, val):
+                    self.after(0, lambda m=msg: self.lbl_status.configure(text=m))
+                    self.after(0, lambda v=val: self.progress.set(v))
+                
+                result = client.analyze_video(
+                    video_path,
+                    rubric,
+                    update_prog,
+                    self.selected_model,
+                    auto_detect_pattern=auto_detect,
+                    api_key=api_key
+                )
+                
+                # Generate PDF automatically
+                if "error" not in result:
+                    pdf_path = self.generate_pdf_for_video(video_path, result)
+                    if pdf_path:
+                        successful += 1
+                    else:
+                        failed.append((video_name, "PDF generation failed"))
+                else:
+                    failed.append((video_name, result.get("error", "Analysis failed")))
+                    
+            except Exception as e:
+                failed.append((video_name, str(e)))
+        
+        # Final status update
+        self.after(0, lambda: self.finish_batch_processing(successful, failed, total_videos))
+    
+    def update_batch_status(self, status_text, progress_value):
+        """Update batch processing status on main thread."""
+        self.lbl_batch_status.configure(text=status_text)
+        self.batch_progress.set(progress_value)
+    
+    def finish_batch_processing(self, successful, failed, total):
+        """Finish batch processing and show results."""
+        self.batch_processing = False
+        self.btn_analyze.configure(state="normal", fg_color="green", text="RUN AI ANALYSIS")
+        self.btn_file.configure(state="normal")
+        self.btn_batch.configure(state="normal")
+        
+        # Show completion message
+        message = f"Batch processing complete!\n\nSuccessful: {successful}/{total}"
+        if failed:
+            message += f"\n\nFailed ({len(failed)}):"
+            for video_name, error in failed[:5]:  # Show first 5 failures
+                message += f"\n  - {video_name}: {error}"
+            if len(failed) > 5:
+                message += f"\n  ... and {len(failed) - 5} more"
+        
+        messagebox.showinfo("Batch Processing Complete", message)
+        
+        # Reset UI
+        self.batch_videos = []
+        self.batch_frame.pack_forget()
+        self.lbl_file.configure(text="No file selected")
+        self.btn_analyze.configure(state="disabled")
+        self.lbl_status.configure(text="Ready")
+        self.progress.set(0)
+    
+    def generate_pdf_for_video(self, video_path, assessment_result):
+        """Generate PDF for a video without user interaction."""
+        try:
+            # Populate form with results
+            self.assessment_form.populate_from_ai(assessment_result)
+            
+            # Get assessment data
+            items, summary = self.assessment_form.get_data()
+            
+            # Generate filename automatically from video file
+            video_dir = os.path.dirname(video_path)
+            video_basename = os.path.basename(video_path)
+            video_name_without_ext = os.path.splitext(video_basename)[0]
+            
+            # Generate PDF filename with auto-incrementing number if needed
+            base_pdf_name = video_name_without_ext
+            pdf_filename = os.path.join(video_dir, f"{base_pdf_name}.pdf")
+            
+            # Check if file exists and find next available number
+            if os.path.exists(pdf_filename):
+                import re
+                match = re.search(r'_(\d+)$', base_pdf_name)
+                if match:
+                    existing_number = int(match.group(1))
+                    base_name = base_pdf_name[:match.start()]
+                    counter = existing_number + 1
+                else:
+                    base_name = base_pdf_name
+                    counter = 1
+                
+                while os.path.exists(pdf_filename):
+                    pdf_filename = os.path.join(video_dir, f"{base_name}_{counter}.pdf")
+                    counter += 1
+            
+            # Generate PDF
+            doc = SimpleDocTemplate(pdf_filename, pagesize=LETTER)
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            # Title
+            elements.append(Paragraph(f"<b>{self.rubrics[self.current_rubric_key]['title']}</b>", styles['Title']))
+            elements.append(Paragraph(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
+            elements.append(Paragraph(f"File: {video_basename}", styles['Normal']))
+            elements.append(Spacer(1, 20))
+            
+            # Table
+            data = [["Criterion", "Score", "AI Assessment & Advice"]]
+            for item in items:
+                data.append([
+                    Paragraph(item['Criterion'], styles['Normal']),
+                    str(item['Score']),
+                    Paragraph(item['Feedback'], styles['Normal'])
+                ])
+            
+            t = Table(data, colWidths=[150, 50, 300])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            elements.append(t)
+            elements.append(Spacer(1, 20))
+            
+            # Summative
+            elements.append(Paragraph("<b>Holistic Summative Comment:</b>", styles['Heading2']))
+            elements.append(Paragraph(summary, styles['Normal']))
+            
+            doc.build(elements)
+            return pdf_filename
+            
+        except Exception as e:
+            print(f"Error generating PDF for {video_path}: {e}")
+            return None
 
     def run_ai_thread(self, api_key):
         client = GeminiClient(api_key)
