@@ -126,6 +126,95 @@ class RubricManager:
         
         return categories
 
+class ErrorHandler:
+    """
+    Provides user-friendly error messages with actionable steps.
+    """
+    @staticmethod
+    def format_error(error_type, error_details, is_fatal=False):
+        """
+        Format error messages in plain English with actionable steps.
+        
+        Args:
+            error_type: Type of error (e.g., "Video Upload Failed", "API Error")
+            error_details: Detailed error message
+            is_fatal: Whether this error requires abandoning the assessment
+        
+        Returns:
+            Formatted error message with steps to resolve
+        """
+        base_message = f"{error_type}\n\nDetails: {error_details}\n\n"
+        
+        if is_fatal:
+            base_message += "⚠️ FATAL ERROR: This assessment cannot be completed.\n\n"
+        else:
+            base_message += "ℹ️ This error may be recoverable. Please try the steps below.\n\n"
+        
+        # Error-specific guidance
+        if "404" in error_details or "not found" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. Check that your API key has access to the selected model
+2. Try switching to a different model (e.g., gemini-2.5-flash)
+3. Verify your API key is correct and active
+4. Check Google AI Studio for model availability status"""
+        
+        elif "403" in error_details or "permission" in error_details.lower() or "forbidden" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. Verify your API key has the necessary permissions
+2. Check your Google Cloud project billing status
+3. Ensure your API key hasn't been revoked
+4. Try regenerating your API key from Google AI Studio"""
+        
+        elif "401" in error_details or "invalid" in error_details.lower() or "unauthorized" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. Check that your API key is correct (no extra spaces)
+2. Verify the API key is from Google AI Studio (not Google Cloud)
+3. Try pasting the API key again
+4. Generate a new API key if needed"""
+        
+        elif "timeout" in error_details.lower() or "timed out" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. Check your internet connection
+2. The video may be too large - try a shorter video
+3. Wait a few minutes and try again
+4. Check Google AI service status"""
+        
+        elif "file" in error_details.lower() and ("not found" in error_details.lower() or "cannot" in error_details.lower()):
+            return base_message + """HOW TO FIX:
+1. Verify the video file still exists at the original location
+2. Check that you have read permissions for the file
+3. Ensure the file isn't open in another program
+4. Try selecting the file again"""
+        
+        elif "json" in error_details.lower() or "parse" in error_details.lower() or "extra data" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. This is usually a temporary AI response issue
+2. Try running the analysis again
+3. If it persists, try switching to a different model
+4. The video assessment may need to be abandoned if this continues"""
+        
+        elif "video processing failed" in error_details.lower() or "upload" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. Check that the video file is a valid format (MP4, MOV, AVI, MKV)
+2. Ensure the video file isn't corrupted
+3. Try converting the video to MP4 format
+4. Check file size - very large files may timeout"""
+        
+        elif "quota" in error_details.lower() or "limit" in error_details.lower() or "rate limit" in error_details.lower():
+            return base_message + """HOW TO FIX:
+1. You've reached your API usage limit
+2. Wait a few minutes before trying again
+3. Check your Google AI Studio quota limits
+4. Consider upgrading your API tier if needed"""
+        
+        else:
+            return base_message + """HOW TO FIX:
+1. Try running the analysis again
+2. Check your internet connection
+3. Verify your API key is valid
+4. If the error persists, try restarting the application
+5. Contact support if the problem continues"""
+
 class ConfigManager:
     """
     Manages saving and loading configuration (API key).
@@ -260,16 +349,79 @@ class GeminiClient:
             
             # 1. Upload File
             progress_callback("Uploading video to Gemini...", 0.1)
-            video_file = genai.upload_file(path=video_path)
+            try:
+                # Check if file exists
+                if not os.path.exists(video_path):
+                    error_msg = ErrorHandler.format_error(
+                        "Video File Not Found",
+                        f"The video file could not be found at: {video_path}",
+                        is_fatal=True
+                    )
+                    return {"error": error_msg, "fatal": True}
+                
+                # Check file size (warn if very large)
+                file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+                if file_size_mb > 100:
+                    print(f"Warning: Large video file ({file_size_mb:.1f} MB) may take longer to process")
+                
+                video_file = genai.upload_file(path=video_path)
+            except FileNotFoundError:
+                error_msg = ErrorHandler.format_error(
+                    "Video File Not Found",
+                    f"The video file could not be found. It may have been moved or deleted.",
+                    is_fatal=True
+                )
+                return {"error": error_msg, "fatal": True}
+            except PermissionError:
+                error_msg = ErrorHandler.format_error(
+                    "File Access Denied",
+                    f"You don't have permission to read the video file. Check file permissions.",
+                    is_fatal=True
+                )
+                return {"error": error_msg, "fatal": True}
+            except Exception as e:
+                error_msg = ErrorHandler.format_error(
+                    "Video Upload Failed",
+                    f"Could not upload video file: {str(e)}",
+                    is_fatal=True
+                )
+                return {"error": error_msg, "fatal": True}
             
             # 2. Wait for Processing
             progress_callback("Processing video (this may take a moment)...", 0.3)
+            max_wait_time = 300  # 5 minutes max wait
+            wait_time = 0
             while video_file.state.name == "PROCESSING":
+                if wait_time >= max_wait_time:
+                    error_msg = ErrorHandler.format_error(
+                        "Video Processing Timeout",
+                        "The video processing took too long. This may be due to a very large file or server issues.",
+                        is_fatal=True
+                    )
+                    try:
+                        genai.delete_file(video_file.name)
+                    except:
+                        pass
+                    return {"error": error_msg, "fatal": True}
                 time.sleep(2)
-                video_file = genai.get_file(video_file.name)
+                wait_time += 2
+                try:
+                    video_file = genai.get_file(video_file.name)
+                except Exception as e:
+                    error_msg = ErrorHandler.format_error(
+                        "Video Processing Error",
+                        f"Error checking video processing status: {str(e)}",
+                        is_fatal=True
+                    )
+                    return {"error": error_msg, "fatal": True}
             
             if video_file.state.name == "FAILED":
-                raise ValueError("Video processing failed on Google's side.")
+                error_msg = ErrorHandler.format_error(
+                    "Video Processing Failed",
+                    "Google's servers could not process your video file. This may be due to file format, corruption, or size issues.",
+                    is_fatal=True
+                )
+                return {"error": error_msg, "fatal": True}
             
             # 2.5. Auto-detect suturing pattern if needed
             detected_pattern = None
@@ -501,25 +653,100 @@ class GeminiClient:
             """
 
             # 4. Generate Content
-            model = genai.GenerativeModel(model_name=model_name)
-            response = model.generate_content(
-                [video_file, prompt],
-                request_options={"timeout": 600}
-            )
+            try:
+                model = genai.GenerativeModel(model_name=model_name)
+                response = model.generate_content(
+                    [video_file, prompt],
+                    request_options={"timeout": 600}
+                )
+            except Exception as e:
+                error_str = str(e)
+                # Cleanup uploaded file before returning error
+                try:
+                    genai.delete_file(video_file.name)
+                except:
+                    pass
+                
+                # Determine if fatal
+                is_fatal = False
+                if "404" in error_str or "not found" in error_str.lower():
+                    is_fatal = True
+                elif "403" in error_str or "permission" in error_str.lower():
+                    is_fatal = True
+                elif "401" in error_str or "invalid" in error_str.lower():
+                    is_fatal = True
+                
+                error_msg = ErrorHandler.format_error(
+                    "AI Analysis Failed",
+                    error_str,
+                    is_fatal=is_fatal
+                )
+                return {"error": error_msg, "fatal": is_fatal}
             
             # 5. Cleanup
-            genai.delete_file(video_file.name)
+            try:
+                genai.delete_file(video_file.name)
+            except Exception as e:
+                print(f"Warning: Could not delete uploaded file: {e}")
             
             progress_callback("Analysis Complete.", 1.0)
             
             # Parse JSON (Strip markdown if present)
-            text = response.text
-            if text.startswith("```json"):
-                text = text[7:-3]
+            text = response.text.strip()
             
-            return json.loads(text)
+            # Remove markdown code blocks if present
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+            
+            # Try to extract JSON if there's extra content
+            try:
+                # First try parsing directly
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                # If there's extra data, try to extract just the JSON object
+                if "Extra data" in str(e) or e.pos:
+                    # Find the first complete JSON object
+                    try:
+                        # Try to find JSON object boundaries
+                        start_idx = text.find('{')
+                        if start_idx != -1:
+                            # Find matching closing brace
+                            brace_count = 0
+                            end_idx = start_idx
+                            for i in range(start_idx, len(text)):
+                                if text[i] == '{':
+                                    brace_count += 1
+                                elif text[i] == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        end_idx = i + 1
+                                        break
+                            
+                            if end_idx > start_idx:
+                                json_text = text[start_idx:end_idx]
+                                return json.loads(json_text)
+                    except:
+                        pass
+                
+                # If all else fails, return error with helpful message
+                error_msg = ErrorHandler.format_error(
+                    "AI Response Parsing Error",
+                    f"The AI returned a response that couldn't be parsed as JSON. This is usually a temporary issue. Error: {str(e)}",
+                    is_fatal=False
+                )
+                return {"error": error_msg, "fatal": False}
         except Exception as e:
-            return {"error": str(e)}
+            error_msg = ErrorHandler.format_error(
+                "Unexpected Analysis Error",
+                f"An unexpected error occurred during video analysis: {str(e)}",
+                is_fatal=True
+            )
+            return {"error": error_msg, "fatal": True}
     
     @staticmethod
     def _detect_suturing_pattern(video_file, model_name, api_key=None):
@@ -631,7 +858,8 @@ class AssessmentPanel(ctk.CTkScrollableFrame):
 
     def populate_from_ai(self, ai_data):
         if "error" in ai_data:
-            messagebox.showerror("AI Error", ai_data["error"])
+            # Error messages are already formatted by ErrorHandler
+            # Don't show another dialog here - let finish_analysis handle it
             return
         
         # Map list to dict for easy lookup
@@ -769,9 +997,39 @@ class MedVATApp(ctk.CTk):
         # Batch Status (hidden initially)
         self.batch_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         self.batch_frame.pack(padx=20, pady=(10, 0), fill="x")
-        self.lbl_batch_status = ctk.CTkLabel(self.batch_frame, text="", text_color="blue", font=("Arial", 10))
+        
+        # Batch progress header
+        self.lbl_batch_header = ctk.CTkLabel(
+            self.batch_frame, 
+            text="", 
+            text_color="blue", 
+            font=("Arial", 11, "bold")
+        )
+        self.lbl_batch_header.pack(anchor="w")
+        
+        # Current video being processed
+        self.lbl_batch_status = ctk.CTkLabel(
+            self.batch_frame, 
+            text="", 
+            text_color="gray", 
+            font=("Arial", 9),
+            wraplength=200
+        )
+        self.lbl_batch_status.pack(anchor="w", pady=(2, 0))
+        
+        # Progress bar
         self.batch_progress = ctk.CTkProgressBar(self.batch_frame)
         self.batch_progress.pack(fill="x", pady=(5, 0))
+        
+        # Completed/Successful/Failed counts
+        self.lbl_batch_counts = ctk.CTkLabel(
+            self.batch_frame,
+            text="",
+            text_color="green",
+            font=("Arial", 9)
+        )
+        self.lbl_batch_counts.pack(anchor="w", pady=(3, 0))
+        
         self.batch_frame.pack_forget()  # Hide initially
         
         # Analyze Button
@@ -870,7 +1128,10 @@ class MedVATApp(ctk.CTk):
             self.lbl_file.configure(text=f"{len(self.batch_videos)} videos selected")
             # Show batch status frame
             self.batch_frame.pack(padx=20, pady=(10, 0), fill="x", before=self.btn_analyze)
-            self.lbl_batch_status.configure(text=f"Ready to process {len(self.batch_videos)} videos")
+            total = len(self.batch_videos)
+            self.lbl_batch_header.configure(text=f"Batch: {total} video{'s' if total != 1 else ''}")
+            self.lbl_batch_status.configure(text="Ready to start processing")
+            self.lbl_batch_counts.configure(text=f"Completed: 0 / Total: {total} | Successful: 0 | Failed: 0")
             self.batch_progress.set(0)
             self.btn_analyze.configure(state="normal", text="START BATCH PROCESSING")
             self.selected_video_path = None  # Clear single file selection
@@ -1085,15 +1346,15 @@ class MedVATApp(ctk.CTk):
         failed = []
         
         for idx, video_path in enumerate(self.batch_videos):
+            video_name = os.path.basename(video_path)
             try:
-                # Update batch status
-                video_name = os.path.basename(video_path)
-                self.after(0, lambda vn=video_name, i=idx, t=total_videos: self.update_batch_status(
-                    f"Processing {i+1}/{t}: {vn}", (i+1) / total_videos
-                ))
+                # Update batch status - starting video
+                completed_before = idx
+                self.after(0, lambda vn=video_name, i=idx, t=total_videos, c=completed_before: 
+                    self.update_batch_status_starting(vn, i, t, c))
                 
                 # Process video
-                def update_prog(msg, val):
+                def update_prog(msg, val, vn=video_name):
                     self.after(0, lambda m=msg: self.lbl_status.configure(text=m))
                     self.after(0, lambda v=val: self.progress.set(v))
                 
@@ -1112,20 +1373,74 @@ class MedVATApp(ctk.CTk):
                     if pdf_path:
                         successful += 1
                     else:
-                        failed.append((video_name, "PDF generation failed"))
+                        failed.append((video_name, "PDF generation failed - check file permissions"))
                 else:
-                    failed.append((video_name, result.get("error", "Analysis failed")))
+                    error_msg = result.get("error", "Analysis failed")
+                    is_fatal = result.get("fatal", False)
+                    # Extract just the error type for summary
+                    if "FATAL ERROR" in error_msg:
+                        error_summary = error_msg.split("\n\n")[0]  # Get first line
+                    else:
+                        error_summary = error_msg.split("\n")[0] if "\n" in error_msg else error_msg[:50]
+                    failed.append((video_name, error_summary))
+                
+                # Update batch status - video completed
+                completed_after = idx + 1
+                self.after(0, lambda vn=video_name, c=completed_after, t=total_videos, s=successful, f=len(failed): 
+                    self.update_batch_status_completed(vn, c, t, s, f))
                     
+            except FileNotFoundError:
+                failed.append((video_name, "Video file not found - may have been moved"))
+                completed_after = idx + 1
+                self.after(0, lambda c=completed_after, t=total_videos, s=successful, f=len(failed): 
+                    self.update_batch_status_error(c, t, s, f))
+            except PermissionError:
+                failed.append((video_name, "Permission denied - check file access"))
+                completed_after = idx + 1
+                self.after(0, lambda c=completed_after, t=total_videos, s=successful, f=len(failed): 
+                    self.update_batch_status_error(c, t, s, f))
             except Exception as e:
-                failed.append((video_name, str(e)))
+                error_msg = ErrorHandler.format_error(
+                    "Unexpected Batch Processing Error",
+                    f"An unexpected error occurred: {str(e)}",
+                    is_fatal=False
+                )
+                # Extract summary for batch display
+                error_summary = error_msg.split("\n")[0] if "\n" in error_msg else str(e)[:50]
+                failed.append((video_name, error_summary))
+                # Update counts after exception
+                completed_after = idx + 1
+                self.after(0, lambda c=completed_after, t=total_videos, s=successful, f=len(failed): 
+                    self.update_batch_status_error(c, t, s, f))
         
         # Final status update
         self.after(0, lambda: self.finish_batch_processing(successful, failed, total_videos))
     
-    def update_batch_status(self, status_text, progress_value):
-        """Update batch processing status on main thread."""
-        self.lbl_batch_status.configure(text=status_text)
-        self.batch_progress.set(progress_value)
+    def update_batch_status_starting(self, video_name, idx, total, completed):
+        """Update batch status when starting a video."""
+        display_name = video_name[:40] + "..." if len(video_name) > 40 else video_name
+        self.lbl_batch_status.configure(text=f"Processing video {idx+1}/{total}: {display_name}")
+        self.batch_progress.set(completed / total)
+        self.lbl_batch_counts.configure(
+            text=f"Completed: {completed} / Total: {total} | Processing..."
+        )
+    
+    def update_batch_status_completed(self, video_name, completed, total, successful, failed):
+        """Update batch status when a video completes."""
+        display_name = video_name[:40] + "..." if len(video_name) > 40 else video_name
+        self.lbl_batch_status.configure(text=f"Completed: {display_name}")
+        self.batch_progress.set(completed / total)
+        self.lbl_batch_counts.configure(
+            text=f"Completed: {completed} / Total: {total} | Successful: {successful} | Failed: {failed}"
+        )
+    
+    def update_batch_status_error(self, completed, total, successful, failed):
+        """Update batch status after an error."""
+        self.lbl_batch_status.configure(text="Error occurred, continuing...")
+        self.batch_progress.set(completed / total)
+        self.lbl_batch_counts.configure(
+            text=f"Completed: {completed} / Total: {total} | Successful: {successful} | Failed: {failed}"
+        )
     
     def finish_batch_processing(self, successful, failed, total):
         """Finish batch processing and show results."""
@@ -1134,16 +1449,30 @@ class MedVATApp(ctk.CTk):
         self.btn_file.configure(state="normal")
         self.btn_batch.configure(state="normal")
         
-        # Show completion message
-        message = f"Batch processing complete!\n\nSuccessful: {successful}/{total}"
+        # Show completion message with actionable information
+        message = f"Batch processing complete!\n\n✅ Successful: {successful}/{total}"
         if failed:
-            message += f"\n\nFailed ({len(failed)}):"
+            message += f"\n\n❌ Failed ({len(failed)}):"
             for video_name, error in failed[:5]:  # Show first 5 failures
-                message += f"\n  - {video_name}: {error}"
+                # Truncate long video names
+                display_name = video_name[:40] + "..." if len(video_name) > 40 else video_name
+                message += f"\n  • {display_name}\n    Error: {error}"
             if len(failed) > 5:
-                message += f"\n  ... and {len(failed) - 5} more"
+                message += f"\n  ... and {len(failed) - 5} more failures"
+            
+            message += "\n\n💡 TIP: Failed videos can be processed individually. Check error messages for specific issues."
         
-        messagebox.showinfo("Batch Processing Complete", message)
+        if successful == total:
+            messagebox.showinfo("✅ Batch Processing Complete", message)
+        elif successful > 0:
+            messagebox.showwarning("⚠️ Batch Processing Complete (Partial Success)", message)
+        else:
+            messagebox.showerror("❌ Batch Processing Failed", 
+                message + "\n\nAll videos failed. Please check:\n" +
+                "1. Your API key is valid\n" +
+                "2. Video files are accessible\n" +
+                "3. Internet connection is stable\n" +
+                "4. Try processing one video individually to diagnose the issue")
         
         # Reset UI
         self.batch_videos = []
@@ -1255,9 +1584,31 @@ class MedVATApp(ctk.CTk):
         self.after(0, lambda: self.finish_analysis(result))
 
     def finish_analysis(self, result):
-        self.assessment_form.populate_from_ai(result)
-        self.btn_analyze.configure(state="normal", fg_color="green")
-        self.lbl_status.configure(text="Analysis Complete")
+        if "error" in result:
+            # Show user-friendly error message
+            error_msg = result["error"]
+            is_fatal = result.get("fatal", False)
+            
+            if is_fatal:
+                messagebox.showerror("Fatal Error - Assessment Abandoned", error_msg)
+                self.lbl_status.configure(text="Assessment Failed - See Error Message")
+            else:
+                # Non-fatal error - show warning but allow retry
+                response = messagebox.askyesno(
+                    "Analysis Error - Recoverable",
+                    error_msg + "\n\nWould you like to try again?"
+                )
+                if not response:
+                    self.lbl_status.configure(text="Analysis Failed - User Cancelled")
+                else:
+                    # User wants to retry - don't reset button state
+                    return
+            
+            self.btn_analyze.configure(state="normal", fg_color="green")
+        else:
+            self.assessment_form.populate_from_ai(result)
+            self.btn_analyze.configure(state="normal", fg_color="green")
+            self.lbl_status.configure(text="Analysis Complete")
 
     def generate_pdf(self):
         items, summary = self.assessment_form.get_data()
@@ -1341,8 +1692,20 @@ class MedVATApp(ctk.CTk):
         try:
             doc.build(elements)
             messagebox.showinfo("Success", "PDF generated successfully.")
+        except PermissionError as e:
+            error_msg = ErrorHandler.format_error(
+                "PDF Save Permission Denied",
+                f"Cannot save PDF file: {str(e)}\n\nCheck that you have write permissions for the directory.",
+                is_fatal=False
+            )
+            messagebox.showerror("PDF Generation Error", error_msg)
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            error_msg = ErrorHandler.format_error(
+                "PDF Generation Error",
+                f"An error occurred while generating the PDF: {str(e)}",
+                is_fatal=False
+            )
+            messagebox.showerror("PDF Generation Error", error_msg)
 
 if __name__ == "__main__":
     app = MedVATApp()
